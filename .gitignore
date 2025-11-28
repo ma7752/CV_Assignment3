@@ -1,0 +1,54 @@
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Test and coverage
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# Data and outputs (do not commit data or generated outputs)
+data/
+data/**
+outputs/
+outputs/**
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.ckpt
+*.bin
+
+# Hugging Face and caches
+.cache/
+transformers_cache/
+huggingface/
+/.cache/huggingface/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# OneDrive temp
+~$*
