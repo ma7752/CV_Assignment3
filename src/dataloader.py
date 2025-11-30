@@ -17,22 +17,26 @@ IMG_HEIGHT = 1080
 
 
 class MovedObjectDataset(Dataset):
-    def __init__(self, annotation_dir, image_base_dir, transform=None):
+    def __init__(self, annotation_dir, image_base_dir, file_list=None, transform=None, **kwargs):
         """
         Args:
             annotation_dir: Path to matched_annotations folder
             image_base_dir: Path to cv_data_hw2/data folder
-            transform: transforms to apply to images
+            file_list: Optional list of specific annotation files to use (for train/test split)
+            transform: Optional transforms to apply to images
         """
         self.annotation_dir = annotation_dir
         self.image_base_dir = image_base_dir
         self.transform = transform
         
-        #Get list of all annotation files
-        self.annotation_files = [
-            f for f in os.listdir(annotation_dir) 
-            if f.endswith('.txt')
-        ]
+        # Get list of all annotation files or use provided list
+        if file_list is not None:
+            self.annotation_files = file_list
+        else:
+            self.annotation_files = [
+                f for f in os.listdir(annotation_dir)
+                if f.endswith('.txt')
+            ]
     
     def __len__(self):
         return len(self.annotation_files)
@@ -120,3 +124,30 @@ class MovedObjectDataset(Dataset):
             img2 = self.transform(img2)
         
         return img1, img2, target
+    
+    def load_split_files(data_dir='data'):
+        """
+        Load previously saved train/test split.
+        
+        Returns:
+            train_files: List of training annotation filenames
+            test_files: List of test annotation filenames
+        """
+        train_path = os.path.join(data_dir, 'train_files.txt')
+        test_path = os.path.join(data_dir, 'test_files.txt')
+        
+        if not os.path.exists(train_path) or not os.path.exists(test_path):
+            raise FileNotFoundError("Split files not found. Run create_train_test_split first.")
+        
+        with open(train_path, 'r') as f:
+            train_files = [line.strip() for line in f if line.strip()]
+        
+        with open(test_path, 'r') as f:
+            test_files = [line.strip() for line in f if line.strip()]
+        
+        return train_files, test_files
+        
+
+
+
+        

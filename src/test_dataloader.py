@@ -2,7 +2,14 @@ import sys
 sys.path.append('.')
 
 from src.dataloader import MovedObjectDataset
+from src.utils import load_split_files
 import torchvision.transforms as transforms
+
+# Load train/test split
+train_files, test_files = load_split_files('data')
+
+print(f"Train files: {len(train_files)}")
+print(f"Test files: {len(test_files)}")
 
 # Define transforms
 transform = transforms.Compose([
@@ -11,32 +18,32 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# Create dataset
-dataset = MovedObjectDataset(
+# Create train dataset
+train_dataset = MovedObjectDataset(
     annotation_dir='data/matched_annotations',
     image_base_dir='/mnt/c/Users/muham/OneDrive/Desktop/ComputerVision/cv_data_hw2/data',
+    file_list=train_files,
     transform=transform
 )
 
-print(f"Dataset size: {len(dataset)}")
+# Create test dataset
+test_dataset = MovedObjectDataset(
+    annotation_dir='data/matched_annotations',
+    image_base_dir='/mnt/c/Users/muham/OneDrive/Desktop/ComputerVision/cv_data_hw2/data',
+    file_list=test_files,
+    transform=transform
+)
 
-# Test first sample
-print("\n=== Testing Sample 0 ===")
-img1, img2, target = dataset[0]
+print(f"\nTrain dataset size: {len(train_dataset)}")
+print(f"Test dataset size: {len(test_dataset)}")
 
-print(f"Image 1 shape: {img1.shape}")
-print(f"Image 2 shape: {img2.shape}")
-print(f"Number of objects: {len(target['labels'])}")
-print(f"Labels: {target['labels']}")
+# Test loading one sample from each
+print("\n=== Testing Train Sample ===")
+img1, img2, target = train_dataset[0]
+print(f"Image shapes: {img1.shape}, {img2.shape}")
+print(f"Num objects: {len(target['labels'])}")
 
-print("\n=== Raw Annotation ===")
-ann_file = 'data/matched_annotations/' + dataset.annotation_files[0]
-with open(ann_file, 'r') as f:
-    lines = f.readlines()
-    print(f"Line 0 (old pos): {lines[0].strip()}")
-    print(f"Line 1 (new pos): {lines[1].strip()}")
-
-print("\n=== Computed Boxes (normalized) ===")
-for i, box in enumerate(target['boxes']):
-    x_c, y_c, w, h = box
-    print(f"Object {i}: x_center={x_c:.4f}, y_center={y_c:.4f}, w={w:.4f}, h={h:.4f}")
+print("\n=== Testing Test Sample ===")
+img1, img2, target = test_dataset[0]
+print(f"Image shapes: {img1.shape}, {img2.shape}")
+print(f"Num objects: {len(target['labels'])}")
