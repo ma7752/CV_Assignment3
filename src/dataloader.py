@@ -5,6 +5,12 @@ Loads image pairs
 Applies transformations/preprocessing
 Implements train/test split
 Returns: image1, image2, bounding boxes, labels
+
+IMPORTANT: Per professor's clarification, we only detect objects that:
+  1. Have IoU = 0 between old and new positions (object moved completely)
+  2. Have IoU > 0 but different classes (class changed - rare)
+  
+Objects with IoU > 0 AND same class are NOT considered "moved" and should not be detected.
 '''
 import os
 import torch
@@ -14,6 +20,45 @@ from PIL import Image
 #Constants for image dimensions
 IMG_WIDTH = 1920
 IMG_HEIGHT = 1080
+
+
+def compute_iou_single(box1, box2):
+    """
+    Compute IoU between two boxes in [x, y, w, h] format (pixel coordinates).
+    
+    Args:
+        box1: [x, y, w, h] - top-left corner + width/height
+        box2: [x, y, w, h] - top-left corner + width/height
+    
+    Returns:
+        IoU value (float)
+    """
+    # Convert to corner format (x1, y1, x2, y2)
+    x1_1, y1_1 = box1[0], box1[1]
+    x2_1, y2_1 = box1[0] + box1[2], box1[1] + box1[3]
+    
+    x1_2, y1_2 = box2[0], box2[1]
+    x2_2, y2_2 = box2[0] + box2[2], box2[1] + box2[3]
+    
+    # Intersection
+    inter_x1 = max(x1_1, x1_2)
+    inter_y1 = max(y1_1, y1_2)
+    inter_x2 = min(x2_1, x2_2)
+    inter_y2 = min(y2_1, y2_2)
+    
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    intersection = inter_w * inter_h
+    
+    # Union
+    area1 = box1[2] * box1[3]
+    area2 = box2[2] * box2[3]
+    union = area1 + area2 - intersection
+    
+    if union == 0:
+        return 0.0
+    
+    return intersection / union
 
 
 class MovedObjectDataset(Dataset):
@@ -71,29 +116,59 @@ class MovedObjectDataset(Dataset):
         assert img_width == img2_width and img_height == img2_height, \
             f"Image size mismatch: img1={img1.size}, img2={img2.size}"
                 
-        #Step 4: Parse annotation file
-        boxes = []
-        labels = []
+        #Step 4: Parse annotation file and filter for TRULY MOVED objects
+        # Per professor's clarification:
+        #   - Detect if IoU = 0 (object moved completely)
+        #   - Detect if IoU > 0 but classes differ (class changed)
+        #   - Do NOT detect if IoU > 0 AND same class (object didn't move)
+        
+        moved_boxes = []  # Boxes in img2 (new positions) for moved objects
+        moved_labels = []
         
         with open(ann_path, 'r') as f:
             lines = f.readlines()
         
-        #Loop through odd-indexed lines (new positions only)
-        for i in range(1, len(lines), 2):
-            parts = lines[i].strip().split()
+        # Process pairs of lines: even = old position (img1), odd = new position (img2)
+        for i in range(0, len(lines) - 1, 2):
+            # Parse OLD position (in img1)
+            old_parts = lines[i].strip().split()
+            old_x = float(old_parts[1])
+            old_y = float(old_parts[2])
+            old_w = float(old_parts[3])
+            old_h = float(old_parts[4])
+            old_class = int(old_parts[5])
+            old_box = [old_x, old_y, old_w, old_h]
             
-            x = float(parts[1])
-            y = float(parts[2])
-            w = float(parts[3])
-            h = float(parts[4])
-            obj_type = int(parts[5])
+            # Parse NEW position (in img2)
+            new_parts = lines[i + 1].strip().split()
+            new_x = float(new_parts[1])
+            new_y = float(new_parts[2])
+            new_w = float(new_parts[3])
+            new_h = float(new_parts[4])
+            new_class = int(new_parts[5])
+            new_box = [new_x, new_y, new_w, new_h]
             
-            boxes.append([x, y, w, h])
-            labels.append(obj_type)
+            # Compute IoU between old and new positions
+            iou = compute_iou_single(old_box, new_box)
+            
+            # Determine if this is a "moved" object we should detect
+            is_moved = False
+            
+            if iou == 0:
+                # Case 1: No overlap - object moved completely
+                is_moved = True
+            elif old_class != new_class:
+                # Case 2: Overlap exists but class changed
+                is_moved = True
+            # else: iou > 0 AND same class → NOT moved, skip
+            
+            if is_moved:
+                moved_boxes.append(new_box)
+                moved_labels.append(new_class)
         
-        #Step 5: Convert to DETR format
+        #Step 5: Convert to DETR format (only for moved objects)
         detr_boxes = []
-        for box in boxes:
+        for box in moved_boxes:
             x, y, w, h = box
             
             # Convert to center format
@@ -110,7 +185,7 @@ class MovedObjectDataset(Dataset):
         
         #Step 6: Convert to tensors
         boxes_tensor = torch.as_tensor(detr_boxes, dtype=torch.float32)
-        labels_tensor = torch.as_tensor(labels, dtype=torch.int64)
+        labels_tensor = torch.as_tensor(moved_labels, dtype=torch.int64)
         
         target = {
             'boxes': boxes_tensor,
