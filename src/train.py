@@ -1,177 +1,228 @@
-'''
-Main training loop
-Load data using dataloader
-Forward pass, loss calculation, backpropagation
-Save checkpoints
-Log training metrics
-Implement different fine-tuning strategies
-'''
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import DetrForObjectDetection
-import torchvision.transforms as transforms
-from tqdm import tqdm
-import os
-import sys
 
-sys.path.append('.')
+from src.model import MovedObjectDETR
 from src.dataloader import MovedObjectDataset
-from src.utils import load_split_files
 from src.config import Config
 
-class DETRTrainer:
-    def __init__(self, config):
-        self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"Using device: {self.device}")
-        
-        # Create output directories
-        os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
-        os.makedirs(config.LOG_DIR, exist_ok=True)
-        
-        # Load model
-        print("Loading DETR model...")
-        self.model = DetrForObjectDetection.from_pretrained(config.MODEL_NAME)
-        self.model.to(self.device)
-        
-        # Setup datasets and dataloaders
-        self.setup_data()
-        
-        # Setup optimizer
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=config.LEARNING_RATE,
-            weight_decay=config.WEIGHT_DECAY
-        )
-        
-        print(f"Model loaded. Total parameters: {sum(p.numel() for p in self.model.parameters()):,}")
-        
-    def setup_data(self):
-        """Setup train and test datasets and dataloaders"""
-        print("Setting up datasets...")
-        
-        # Load train/test split
-        train_files, test_files = load_split_files('data')
-        
-        # Define transforms
-        transform = transforms.Compose([
-            transforms.Resize((self.config.DETR_INPUT_SIZE, self.config.DETR_INPUT_SIZE)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        
-        # Create datasets
-        self.train_dataset = MovedObjectDataset(
-            annotation_dir=self.config.ANNOTATION_DIR,
-            image_base_dir=self.config.DATA_BASE_DIR,
-            file_list=train_files,
-            transform=transform
-        )
-        
-        self.test_dataset = MovedObjectDataset(
-            annotation_dir=self.config.ANNOTATION_DIR,
-            image_base_dir=self.config.DATA_BASE_DIR,
-            file_list=test_files,
-            transform=transform
-        )
-        
-        # Create dataloaders
-        self.train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.config.BATCH_SIZE,
-            shuffle=True,
-            num_workers=0  # Set to 0 for Windows/WSL compatibility
-        )
-        
-        self.test_loader = DataLoader(
-            self.test_dataset,
-            batch_size=self.config.BATCH_SIZE,
-            shuffle=False,
-            num_workers=0
-        )
-        
-        print(f"Train dataset: {len(self.train_dataset)} samples")
-        print(f"Test dataset: {len(self.test_dataset)} samples")
+import torchvision.transforms as T
+import os
+
+#1. COLLATE FUNCTION
+def collate_fn(batch):
     
-    def train_epoch(self, epoch):
-        """Train for one epoch"""
-        self.model.train()
-        total_loss = 0
-        
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.config.NUM_EPOCHS}")
-        
-        for batch_idx, (img1, img2, targets) in enumerate(pbar):
-            # Move to device
-            img1 = img1.to(self.device)
-            img2 = img2.to(self.device)
-            
-            # TODO: Implement forward hook and feature extraction here
-            # For now, this is a placeholder
-            
-            # Forward pass (placeholder - will be updated with feature difference)
-            # outputs = self.model(pixel_values=img1, labels=targets)
-            
-            # Backward pass
-            self.optimizer.zero_grad()
-            # loss = outputs.loss
-            # loss.backward()
-            # self.optimizer.step()
-            
-            # total_loss += loss.item()
-            # pbar.set_postfix({'loss': loss.item()})
-            
-            print("TODO: Implement forward pass with feature difference")
-            break  # Remove this once implemented
-        
-        return total_loss / len(self.train_loader)
+    #Separate into lists
+    img1_list = [sample[0] for sample in batch]  # [img1_0, img1_1, img1_2]
+    img2_list = [sample[1] for sample in batch]  # [img2_0, img2_1, img2_2]
+    target_list = [sample[2] for sample in batch]  # [target_0, target_1, target_2]
     
-    def validate(self):
-        """Validate on test set"""
-        self.model.eval()
-        total_loss = 0
-        
-        with torch.no_grad():
-            for img1, img2, targets in tqdm(self.test_loader, desc="Validating"):
-                img1 = img1.to(self.device)
-                img2 = img2.to(self.device)
-                
-                # TODO: Implement validation
-                # outputs = self.model(pixel_values=img1, labels=targets)
-                # total_loss += outputs.loss.item()
-                
-                print("TODO: Implement validation")
-                break  # Remove this once implemented
-        
-        return total_loss / len(self.test_loader)
+    #Stack images (they're all same size)
+    img1_batch = torch.stack(img1_list)  
+    img2_batch = torch.stack(img2_list)  
+
     
-    def train(self):
-        """Main training loop"""
-        print(f"\nStarting training for {self.config.NUM_EPOCHS} epochs...")
-        
-        for epoch in range(self.config.NUM_EPOCHS):
-            train_loss = self.train_epoch(epoch)
-            val_loss = self.validate()
-            
-            print(f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
-            
-            # Save checkpoint
-            if (epoch + 1) % 5 == 0:
-                checkpoint_path = os.path.join(
-                    self.config.CHECKPOINT_DIR, 
-                    f"checkpoint_epoch_{epoch+1}.pth"
-                )
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                    'train_loss': train_loss,
-                    'val_loss': val_loss,
-                }, checkpoint_path)
-                print(f"Checkpoint saved: {checkpoint_path}")
+    return img1_batch, img2_batch, target_list
 
 
-if __name__ == "__main__":
-    config = Config()
-    trainer = DETRTrainer(config)
-    trainer.train()
+#2. FINE-TUNING SETUP
+def setup_finetuning(model, strategy='all'):
+    """
+    Configure which parameters to train based on strategy.
+    
+    Strategies:
+        'all'          - Train all parameters
+        'head_only'    - Only train classification + bbox heads
+        'transformer'  - Train transformer + heads, freeze backbone
+        'custom_layer' - Train our custom layer4 + heads
+    """
+    
+    if strategy == 'all':
+        # Unfreeze everything
+        for name, param in model.named_parameters():
+            param.requires_grad = True
+
+    else:
+        # Freeze everything first
+        for name, param in model.named_parameters():
+            param.requires_grad = False
+
+        if strategy == "head_only":
+            for name, param in model.named_parameters():
+                if 'class_labels_classifier' in name or 'bbox_predictor' in name:
+                    param.requires_grad = True
+
+        elif strategy == "transformer":
+            for name, param in model.named_parameters():
+                if 'backbone' not in name:
+                    param.requires_grad = True
+
+        elif strategy == 'custom_layer':
+            for name, param in model.named_parameters():
+                if 'layer4' in name or 'class_labels_classifier' in name or 'bbox_predictor' in name:
+                    param.requires_grad = True
+
+    # Return only trainable parameters
+    return [p for p in model.parameters() if p.requires_grad]
+
+
+    
+    
+    
+    
+
+    
+    
+
+
+
+
+
+#3. OPTIMIZER CREATION
+def create_optimizer(model, base_lr=1e-4, weight_decay=1e-4):
+    # Get only trainable parameters
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    
+    optimizer = torch.optim.AdamW(
+        trainable_params,
+        lr=base_lr,
+        weight_decay=weight_decay
+    )
+    
+    return optimizer
+
+
+# 4. TRAINING LOOP
+def train_one_epoch(model, dataloader, optimizer, device, epoch):
+    model.train()  # Set to training mode (enables dropout, etc.)
+    total_loss = 0
+    
+    for batch_idx, (img1, img2, targets) in enumerate(dataloader):
+        # Step 1: Move to device
+        img1 = img1.to(device)
+        img2 = img2.to(device)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        
+        # Step 2: Forward pass
+        outputs = model(img1, img2, targets)
+        loss = outputs.loss
+        
+        # Step 3: Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        
+        # Step 4: Gradient clipping (prevents exploding gradients)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        
+        # Step 5: Update weights
+        optimizer.step()
+        
+        # Step 6: Track loss
+        total_loss += loss.item()
+        
+        #progress
+        if batch_idx % 10 == 0:
+            print(f"Epoch {epoch}, Batch {batch_idx}/{len(dataloader)}, Loss: {loss.item():.4f}")
+    
+    return total_loss / len(dataloader)
+
+# 5. CHECKPOINTING
+def save_checkpoint(model, optimizer, epoch, loss, strategy, path):
+    """Save training checkpoint."""
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        'strategy': strategy,
+    }
+    torch.save(checkpoint, path)
+    print(f"Checkpoint saved: {path}")
+
+def load_checkpoint(path, model, optimizer=None):
+    #load training checkpoint
+    checkpoint = torch.load(path)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
+    
+    return checkpoint['epoch']
+
+
+# MAIN
+def main():
+    # Setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    os.makedirs(Config.CHECKPOINT_DIR, exist_ok=True)
+    
+    # Get hyperparameters from Config
+    num_epochs = Config.NUM_EPOCHS
+    batch_size = Config.BATCH_SIZE
+    learning_rate = Config.LEARNING_RATE
+    strategy = Config.FINETUNING_STRATEGY  # Read from config file!
+
+    # Create transform
+    transform = T.Compose([
+        T.Resize((800, 800)),
+        T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    
+    # Create dataset
+    dataset = MovedObjectDataset(
+        annotation_dir=Config.ANNOTATION_DIR,
+        image_base_dir=Config.DATA_BASE_DIR,
+        transform=transform
+    )
+
+    # Create dataloader
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+    
+    print(f"Dataset: {len(dataset)} samples")
+    print(f"Batches per epoch: {len(dataloader)}")
+
+
+    # Create model
+    model = MovedObjectDETR(Config.NUM_CLASSES)
+    model.to(device)
+
+    # Setup fine-tuning
+    trainable_params = setup_finetuning(model, strategy=strategy)
+    print(f"Strategy: {strategy}")
+    print(f"Trainable parameters: {len(trainable_params)}")
+    
+
+    # Create optimizer
+    optimizer = create_optimizer(model, base_lr=learning_rate)
+
+    # Training loop
+    for epoch in range(1, num_epochs + 1):
+        avg_loss = train_one_epoch(model, dataloader, optimizer, device, epoch)
+        print(f"Epoch {epoch}/{num_epochs} complete. Average Loss: {avg_loss:.4f}")
+        
+        # Save checkpoint every 5 epochs
+        if epoch % 5 == 0:
+            save_checkpoint(
+                model, optimizer, epoch, avg_loss, strategy,
+                f"outputs/checkpoints/checkpoint_epoch_{epoch}.pth"
+            )
+
+
+    # Save final model
+    save_checkpoint(
+        model, optimizer, num_epochs, avg_loss, strategy,
+        f"outputs/checkpoints/final_model_{strategy}.pth"
+    )
+
+if __name__ == '__main__':
+    main()

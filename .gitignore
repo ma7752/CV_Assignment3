@@ -29,6 +29,12 @@ data/**
 outputs/
 outputs/**
 
+
+#tests
+tests/
+tests/**
+ 
+
 # Model weights and checkpoints
 *.pt
 *.pth

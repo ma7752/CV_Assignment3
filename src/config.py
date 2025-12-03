@@ -39,7 +39,10 @@ class Config:
     # DETR specific
     DETR_INPUT_SIZE = 800  # DETR typically uses 800x800
     
-    # Fine-tuning strategy 
-    FREEZE_BACKBONE = False
-    FREEZE_TRANSFORMER = False
-    FREEZE_CLASSIFICATION_HEAD = False
+    # Fine-tuning strategy
+    # Options: 'all', 'head_only', 'transformer', 'custom_layer'
+    #   'all'          - Train all parameters
+    #   'head_only'    - Only train classification + bbox heads
+    #   'transformer'  - Train transformer + heads, freeze backbone
+    #   'custom_layer' - Train our custom layer4 + heads
+    FINETUNING_STRATEGY = 'all'

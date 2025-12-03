@@ -1,33 +1,52 @@
 import torch
 import torch.nn as nn
-from transformers import DetrForObjectDetection
+from transformers import DetrForObjectDetection, DetrConfig
 
-
+def convert_targets_to_detr_format(targets):
+        """
+        Convert our dataloader format to DETR's expected format.
+        
+        Our format:
+            {'boxes': tensor, 'labels': tensor, 'image_id': tensor}
+        OR already in DETR format:
+            {'boxes': tensor, 'class_labels': tensor}
+        
+        DETR format:
+            {'boxes': tensor, 'class_labels': tensor}
+        
+        Args:
+            targets: List of dicts from our dataloader
+            
+        Returns:
+            List of dicts in DETR format
+        """
+        if targets is None:
+            return None
+        
+        detr_targets = []
+        for target in targets:
+            # Handle both 'labels' and 'class_labels' keys
+            if 'class_labels' in target:
+                # Already in DETR format
+                detr_target = {
+                    'class_labels': target['class_labels'],
+                    'boxes': target['boxes']
+                }
+            elif 'labels' in target:
+                # Convert from our dataloader format
+                detr_target = {
+                    'class_labels': target['labels'],  # Rename 'labels' to 'class_labels'
+                    'boxes': target['boxes']
+                }
+            else:
+                raise KeyError(f"Target dict must contain either 'labels' or 'class_labels', got keys: {target.keys()}")
+            
+            detr_targets.append(detr_target)
+        
+        return detr_targets
 class FeatureDifferenceLayer(nn.Module):
     """
     Custom layer that replaces ResNet's layer4 for change detection.
-    
-    Traditional ResNet layer4:
-        - Takes 1024-channel features from layer3
-        - Applies several residual blocks
-        - Outputs 2048-channel features
-    
-    Our FeatureDifferenceLayer:
-        - Takes 1024-channel features from layer3 (from TWO images)
-        - Computes feature difference: feat2 - feat1
-        - Projects difference to 2048 channels using 1x1 convolution
-        - This highlights what changed between the two images!
-    
-    Why this works:
-        - Feature differences emphasize regions that changed
-        - DETR's transformer can focus on these changed regions
-        - We skip the computational cost of layer4
-        - The 1x1 projection is much faster than full layer4
-    
-    Shape flow:
-        img1 → layer3 → [B, 1024, H/16, W/16] → (stored)
-        img2 → layer3 → [B, 1024, H/16, W/16] → difference → [B, 1024, H/16, W/16]
-        difference → 1x1 conv → [B, 2048, H/16, W/16] → continues to DETR
     """
     def __init__(self):
         super().__init__()
@@ -73,51 +92,6 @@ class FeatureDifferenceLayer(nn.Module):
 class MovedObjectDETR(nn.Module):
     """
     DETR-based object detection model for change detection / moved object detection.
-    
-    Architecture Overview:
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ Input: Two images (img1, img2) - same scene at different times │
-    └─────────────────────────────────────────────────────────────────┘
-                            ↓
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ ResNet Backbone (up to layer3) - FROZEN                         │
-    │   • Extracts features from both images                          │
-    │   • Output: 1024 channels at 1/16 resolution                    │
-    └─────────────────────────────────────────────────────────────────┘
-                            ↓
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ FeatureDifferenceLayer (replaces layer4) - TRAINABLE            │
-    │   • Computes feat2 - feat1                                      │
-    │   • Projects 1024 → 2048 channels                               │
-    │   • Highlights changed regions                                  │
-    └─────────────────────────────────────────────────────────────────┘
-                            ↓
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ DETR Pipeline - TRAINABLE                                       │
-    │   • Input projection: 2048 → 256 dims                           │
-    │   • Positional encoding                                         │
-    │   • Transformer encoder (6 layers)                              │
-    │   • Transformer decoder (6 layers, 100 object queries)          │
-    │   • Classification head: 256 → num_classes                      │
-    │   • Bounding box head: 256 → 4 (cx, cy, w, h)                   │
-    └─────────────────────────────────────────────────────────────────┘
-                            ↓
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ Output: 100 object predictions                                  │
-    │   • logits: [B, 100, num_classes+1] - class probabilities       │
-    │   • pred_boxes: [B, 100, 4] - normalized box coordinates        │
-    └─────────────────────────────────────────────────────────────────┘
-    
-    Key Innovation:
-        Instead of processing one image, we process TWO images and compute
-        feature differences. This allows the model to focus on objects that
-        moved, appeared, or disappeared between the two frames.
-    
-    Training Strategies (from assignment):
-        1. Fine-tune all parameters (except frozen backbone)
-        2. Fine-tune only transformer classification head
-        3. Fine-tune only transformer block (encoder + decoder)
-        4. Compare performance across strategies
     """
     
     def __init__(self, num_classes=6):
@@ -136,9 +110,22 @@ class MovedObjectDETR(nn.Module):
         """
         super().__init__()
         
-        # Load pretrained DETR with ResNet-50 backbone
-        # This gives us strong pretrained weights from COCO dataset
-        self.detr = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
+        # Calculate total number of labels (classes + no-object)
+        num_labels = num_classes + 1
+        
+        # Configure DETR with our number of classes BEFORE loading
+        # This ensures the loss function's empty_weight is created with correct size
+        config = DetrConfig.from_pretrained("facebook/detr-resnet-50")
+        config.num_labels = num_labels
+        config.eos_coefficient = 0.1  # Lower weight for "no object" class
+        
+        # Load pretrained DETR with our custom config
+        # ignore_mismatched_sizes=True allows loading despite classifier size mismatch
+        self.detr = DetrForObjectDetection.from_pretrained(
+            "facebook/detr-resnet-50",
+            config=config,
+            ignore_mismatched_sizes=True
+        )
         
         # Access the ResNet backbone inside DETR
         # Path: self.detr.model.backbone.conv_encoder.model = ResNet
@@ -155,16 +142,6 @@ class MovedObjectDETR(nn.Module):
         for name, param in backbone.named_parameters():
             if 'layer4' not in name:
                 param.requires_grad = False
-        
-        # Adjust the classification head for our dataset
-        # DETR predicts num_classes + 1 (extra class for "no object")
-        # Original DETR: 92 classes (91 COCO classes + no-object)
-        # Our model: num_classes + 1
-        num_labels = num_classes + 1
-        self.detr.class_labels_classifier = nn.Linear(
-            self.detr.class_labels_classifier.in_features,  # 256 (transformer hidden dim)
-            num_labels
-        )
         
         print("Model architecture created:")
         print("  - ResNet up to layer3 (frozen)")
@@ -252,9 +229,14 @@ class MovedObjectDETR(nn.Module):
         #   2. custom_layer4 computes DIFFERENCE (feat2 - feat1) and projects it
         #   3. Continue through DETR: projection → transformer → classification/bbox heads
         #   4. If targets provided, compute loss using Hungarian matching
-        outputs = self.detr(pixel_values=img2, pixel_mask=pixel_mask, labels=targets)
-        
+        # Convert targets to DETR format
+        detr_targets = convert_targets_to_detr_format(targets)
+
+        outputs = self.detr(pixel_values=img2, pixel_mask=pixel_mask, labels=detr_targets)
+                
         return outputs
+    
+    
 
 
 
